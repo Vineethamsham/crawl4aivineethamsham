@@ -1,103 +1,95 @@
 import json
 import time
 import re
-from pathlib import Path
-from urllib.parse import urlparse
-
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
 from bs4 import BeautifulSoup
+from pathlib import Path
+from urllib.parse import urlparse
 
-# === CONFIG ===
-CHROMEDRIVER_PATH = r"C:\Users\VAmsham1\chromedriver\chromedriver.exe"
+# ✅ CONFIGURATION
+CHROMEDRIVER_PATH = r"C:\Users\VAmsham1\chromedriver\chromedriver.exe"  # adjust if needed
 JSON_PATH = Path("data/pages_json/discovered_links.json")
 OUTPUT_DIR = Path("output_markdown")
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
-# === Load First URL ===
+# ✅ Load one URL from JSON
 with open(JSON_PATH, "r", encoding="utf-8") as f:
-    data = json.load(f)
-url = data[0]["url"]  # Only 1st URL for now
+    url = json.load(f)[0]["url"]
 print(f"🌐 Crawling: {url}")
 
-# === Clean filename ===
-def sanitize_filename(url: str) -> str:
-    parsed = urlparse(url)
-    return re.sub(r"[^\w]+", "_", parsed.netloc + parsed.path).strip("_")
-
-# === Setup Chrome (Headless) ===
+# ✅ Setup Selenium
 options = Options()
 options.add_argument("--headless=new")
 options.add_argument("--disable-gpu")
 options.add_argument("--no-sandbox")
 
-service = Service(CHROMEDRIVER_PATH)
-driver = webdriver.Chrome(service=service, options=options)
+driver = webdriver.Chrome(service=Service(CHROMEDRIVER_PATH), options=options)
+driver.get(url)
+time.sleep(3)
 
-try:
-    driver.get(url)
-    time.sleep(3)
+# ✅ Try expanding all collapsible elements
+driver.execute_script("""
+    document.querySelectorAll('summary, button, .accordion').forEach(el => {
+        try { el.click(); } catch (e) {}
+    });
+""")
+time.sleep(1.5)
 
-    # Try to expand interactive sections
-    driver.execute_script("""
-        document.querySelectorAll('[role=button], summary, .accordion').forEach(el => {
-            try { el.click(); } catch(e) {}
-        });
-    """)
-    time.sleep(2)
+# ✅ Parse with BeautifulSoup
+soup = BeautifulSoup(driver.page_source, "html.parser")
+driver.quit()
 
-    html = driver.page_source
-    soup = BeautifulSoup(html, "html.parser")
+# ✅ Markdown setup
+def sanitize_filename(url):
+    return re.sub(r'\W+', '_', url).strip('_')
 
-    # === Markdown output ===
-    filename = sanitize_filename(url) + ".md"
-    filepath = OUTPUT_DIR / filename
+title = soup.title.get_text(strip=True) if soup.title else "No Title"
+title_slug = sanitize_filename(url)
+md_lines = [f"# {title}", f"URL: {url}", ""]
 
-    with filepath.open("w", encoding="utf-8") as f:
-        # Page Title and URL
-        title = soup.title.string.strip() if soup.title else "No Title"
-        f.write(f"# {title}\n")
-        f.write(f"URL: {url}\n\n")
+# ✅ Loop through headings and capture rich content
+for header in soup.find_all(["h2", "h3"]):
+    heading_text = header.get_text(strip=True)
+    md_lines.append(f"## {heading_text}")
+    section_content = []
 
-        for header in soup.find_all(["h2", "h3"]):
-            heading = header.get_text(strip=True)
-            f.write(f"## {heading}\n\n")
+    for sibling in header.find_next_siblings():
+        if sibling.name in ["h2", "h3"]:
+            break
 
-            section_content = []
+        # Extract paragraphs
+        if sibling.name == "p":
+            section_content.append(sibling.get_text(strip=True))
 
-            for sibling in header.find_next_siblings():
-                if sibling.name in ["h2", "h3"]:
-                    break
+        # Extract lists
+        elif sibling.name in ["ul", "ol"]:
+            for li in sibling.find_all("li"):
+                section_content.append(f"- {li.get_text(strip=True)}")
 
-                if sibling.name == "p":
-                    text = sibling.get_text(strip=True)
-                    if text:
-                        section_content.append(text)
+        # Extract tables
+        elif sibling.name == "table":
+            rows = sibling.find_all("tr")
+            for i, row in enumerate(rows):
+                cols = [col.get_text(strip=True) for col in row.find_all(["td", "th"])]
+                section_content.append(" | ".join(cols))
+                if i == 0:
+                    section_content.append("|".join(["---"] * len(cols)))
 
-                elif sibling.name in ["ul", "ol"]:
-                    for li in sibling.find_all("li"):
-                        section_content.append(f"- {li.get_text(strip=True)}")
+        # Divs/spans with text
+        elif sibling.name in ["div", "span"]:
+            section_content.append(sibling.get_text(strip=True))
 
-                elif sibling.name == "table":
-                    rows = sibling.find_all("tr")
-                    for i, row in enumerate(rows):
-                        cols = [col.get_text(strip=True) for col in row.find_all(["td", "th"])]
-                        line = " | ".join(cols)
-                        section_content.append(line)
-                        if i == 0:
-                            section_content.append("|".join(["---"] * len(cols)))
+        # Custom blocks (e.g., cmp-text, cmp-list, cmp-table)
+        elif sibling.get("class") and any(cls in sibling.get("class") for cls in ["cmp-text", "cmp-list", "cmp-table"]):
+            section_content.append(sibling.get_text(strip=True))
 
-                elif sibling.name in ["div", "span"]:
-                    text = sibling.get_text(strip=True)
-                    if text:
-                        section_content.append(text)
+    if section_content:
+        md_lines.extend(section_content)
+        md_lines.append("")
 
-            if section_content:
-                f.write("\n".join(section_content))
-                f.write("\n\n")
-
-    print(f"✅ Saved Markdown to {filepath}")
-
-finally:
-    driver.quit()
+# ✅ Save Markdown
+output_file = OUTPUT_DIR / f"{title_slug}.md"
+output_file.write_text("\n".join(md_lines), encoding="utf-8")
+print(f"✅ Saved Markdown to {output_file}")

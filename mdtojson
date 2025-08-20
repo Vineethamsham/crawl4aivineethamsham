@@ -1,0 +1,95 @@
+import json
+import re
+from pathlib import Path
+
+# === ✅ Config ===
+MD_PATH = Path("output_markdown/business_unlimited_enterprise_subsidy_2_0.md")  # Replace with your file
+JSON_OUT = MD_PATH.with_suffix(".json")
+
+# === ✅ Helper to parse markdown into sections ===
+def parse_markdown(md_text):
+    lines = md_text.splitlines()
+    json_data = {
+        "title": "",
+        "url": "",
+        "sections": []
+    }
+
+    current_section = None
+    current_content = []
+    table_buffer = []
+    table_header = None
+
+    for line in lines:
+        line = line.strip()
+
+        # Title (first line)
+        if line.startswith("# ") and not json_data["title"]:
+            json_data["title"] = line[2:].strip()
+
+        # URL
+        elif line.startswith("URL:"):
+            json_data["url"] = line.replace("URL:", "").strip()
+
+        # Section Heading
+        elif line.startswith("## "):
+            # Store previous section
+            if current_section:
+                json_data["sections"].append({
+                    "heading": current_section,
+                    "content": current_content
+                })
+                current_content = []
+            current_section = line[3:].strip()
+
+        # Table Row
+        elif "|" in line:
+            cols = [c.strip() for c in line.split("|") if c.strip()]
+            if not table_header:
+                table_header = cols
+                table_buffer = []
+            else:
+                table_buffer.append(cols)
+
+        # Table Divider
+        elif re.match(r"^\|?\s*[-|]+\s*\|?$", line):
+            continue
+
+        # Bullet Points
+        elif line.startswith("- "):
+            current_content.append(line.strip())
+
+        # Paragraph
+        elif line:
+            if table_header:
+                # Flush table as structured object
+                current_content.append({
+                    "type": "table",
+                    "headers": table_header,
+                    "rows": table_buffer
+                })
+                table_header = None
+                table_buffer = []
+            current_content.append(line.strip())
+
+    # Append last section
+    if current_section:
+        if table_header:
+            current_content.append({
+                "type": "table",
+                "headers": table_header,
+                "rows": table_buffer
+            })
+        json_data["sections"].append({
+            "heading": current_section,
+            "content": current_content
+        })
+
+    return json_data
+
+# === ✅ Run
+md_text = MD_PATH.read_text(encoding="utf-8")
+parsed = parse_markdown(md_text)
+JSON_OUT.write_text(json.dumps(parsed, indent=2, ensure_ascii=False))
+
+print(f"✅ Converted to JSON: {JSON_OUT}")

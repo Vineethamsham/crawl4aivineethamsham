@@ -74,3 +74,87 @@ try:
 
 finally:
     driver.quit()
+
+
+
+import os
+import time
+import re
+from selenium import webdriver
+from selenium.webdriver.chrome.service import Service as ChromeService
+from selenium.webdriver.chrome.options import Options
+from bs4 import BeautifulSoup
+from pathlib import Path
+
+# Setup
+URL = "https://magentapulse.t-mobile.com/us/en/customer-support/plans/business/phones/business-unlimited-enterprise-subsidy-2-0"
+OUTPUT_DIR = Path("output_markdown")
+OUTPUT_DIR.mkdir(exist_ok=True)
+
+# File-safe name
+def sanitize_filename(url):
+    return re.sub(r'\W+', '_', url).strip('_')
+
+# Setup ChromeDriver (headless optional)
+options = Options()
+options.add_argument("--headless=new")
+driver = webdriver.Chrome(service=ChromeService(), options=options)
+
+# Load page
+print(f"🌐 Crawling: {URL}")
+driver.get(URL)
+time.sleep(3)
+soup = BeautifulSoup(driver.page_source, "html.parser")
+driver.quit()
+
+# Start writing markdown
+filename = sanitize_filename(URL) + ".md"
+filepath = OUTPUT_DIR / filename
+
+with filepath.open("w", encoding="utf-8") as f:
+    f.write(f"# {soup.title.string.strip()}\n")
+    f.write(f"URL: {URL}\n\n")
+
+    headers = soup.find_all(["h2", "h3"])
+    for header in headers:
+        heading_text = header.get_text(strip=True)
+        f.write(f"## {heading_text}\n\n")
+
+        section_content = []
+
+        for sibling in header.find_next_siblings():
+            if sibling.name in ["h2", "h3"]:
+                break
+
+            # Paragraphs
+            if sibling.name == "p":
+                text = sibling.get_text(strip=True)
+                if text:
+                    section_content.append(text)
+
+            # Lists
+            elif sibling.name in ["ul", "ol"]:
+                for li in sibling.find_all("li"):
+                    section_content.append(f"- {li.get_text(strip=True)}")
+
+            # Tables
+            elif sibling.name == "table":
+                rows = sibling.find_all("tr")
+                for i, row in enumerate(rows):
+                    cols = [col.get_text(strip=True) for col in row.find_all(["td", "th"])]
+                    line = " | ".join(cols)
+                    section_content.append(line)
+                    if i == 0:
+                        section_content.append("|".join(["---"] * len(cols)))  # Markdown table divider
+
+            # Generic divs or spans
+            elif sibling.name in ["div", "span"]:
+                text = sibling.get_text(strip=True)
+                if text:
+                    section_content.append(text)
+
+        if section_content:
+            f.write("\n".join(section_content))
+            f.write("\n\n")
+
+print(f"✅ Saved to {filepath}")

@@ -158,3 +158,122 @@ with filepath.open("w", encoding="utf-8") as f:
             f.write("\n\n")
 
 print(f"✅ Saved to {filepath}")
+
+
+
+
+import json
+import time
+import re
+from pathlib import Path
+from urllib.parse import urlparse
+
+from bs4 import BeautifulSoup
+from selenium import webdriver
+from selenium.webdriver.chrome.service import Service
+from selenium.webdriver.chrome.options import Options
+
+# ✅ Path to your manually downloaded ChromeDriver
+CHROMEDRIVER_PATH = r"C:\Users\VAmsham1\chromedriver\chromedriver.exe"
+
+# ✅ Paths for input/output
+INPUT_JSON = Path("data/pages_json/discovered_links.json")
+OUTPUT_DIR = Path("output_markdown")
+OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+
+# ✅ Utility: create a safe filename from URL
+def sanitize_filename(url):
+    return re.sub(r'\W+', '_', url).strip('_')
+
+# ✅ Load first URL from your JSON
+with INPUT_JSON.open(encoding="utf-8") as f:
+    data = json.load(f)
+
+url = data[0]["url"]
+anchor_text = data[0].get("anchor_text", "Untitled Plan")
+print(f"🌐 Crawling: {url}")
+
+# ✅ Set up Selenium (headless Chrome)
+options = Options()
+options.add_argument("--headless=new")
+options.add_argument("--disable-gpu")
+options.add_argument("--no-sandbox")
+service = Service(CHROMEDRIVER_PATH)
+driver = webdriver.Chrome(service=service, options=options)
+
+try:
+    # Open the URL
+    driver.get(url)
+    time.sleep(3)  # Wait for full load
+
+    # ✅ Try expanding all interactive/tab/accordion elements
+    driver.execute_script("""
+        document.querySelectorAll('[role=button], .accordion, summary').forEach(el => {
+            try { el.click(); } catch(e) {}
+        });
+    """)
+    time.sleep(1.5)
+
+    # ✅ Parse the full DOM
+    soup = BeautifulSoup(driver.page_source, "lxml")
+
+    # ✅ File naming
+    title_slug = sanitize_filename(url)
+    md_file = OUTPUT_DIR / f"{title_slug}.md"
+
+    # ✅ Markdown building
+    md_lines = [f"# {anchor_text}", f"URL: {url}", ""]
+
+    # Loop through each h2/h3 section
+    headers = soup.find_all(["h2", "h3"])
+    for header in headers:
+        heading_text = header.get_text(strip=True)
+        md_lines.append(f"## {heading_text}\n")
+
+        section_content = []
+
+        for sibling in header.find_next_siblings():
+            if sibling.name in ["h2", "h3"]:
+                break
+
+            # Paragraphs
+            if sibling.name == "p":
+                text = sibling.get_text(strip=True)
+                if text:
+                    section_content.append(text)
+
+            # Lists
+            elif sibling.name in ["ul", "ol"]:
+                for li in sibling.find_all("li"):
+                    section_content.append(f"- {li.get_text(strip=True)}")
+
+            # Tables
+            elif sibling.name == "table":
+                rows = sibling.find_all("tr")
+                for i, row in enumerate(rows):
+                    cols = [col.get_text(strip=True) for col in row.find_all(["td", "th"])]
+                    if not cols:
+                        continue
+                    section_content.append(" | ".join(cols))
+                    if i == 0:
+                        section_content.append("|".join(["---"] * len(cols)))
+
+            # Generic div/span
+            elif sibling.name in ["div", "span"]:
+                text = sibling.get_text(strip=True)
+                if text:
+                    section_content.append(text)
+
+        # Write section content
+        if section_content:
+            md_lines.extend(section_content)
+            md_lines.append("")
+
+    # ✅ Write to .md file
+    md_text = "\n".join(md_lines)
+    md_file.write_text(md_text, encoding="utf-8")
+
+    print(f"✅ Saved Markdown to: {md_file}")
+
+finally:
+    driver.quit()

@@ -1,15 +1,18 @@
 import re, json
 from pathlib import Path
 
+# === 📁 Folder paths ===
 INPUT_DIR = Path("output_markdown")
 OUTPUT_DIR = Path("output_json")
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
+# === 🔁 Markdown to JSON parser ===
 def parse_markdown_to_json(md_text):
     lines = md_text.splitlines()
     result = {
         "title": "",
         "url": "",
+        "intro": [],
         "sections": []
     }
 
@@ -17,8 +20,6 @@ def parse_markdown_to_json(md_text):
 
     for line in lines:
         stripped = line.strip()
-
-        # Skip empty lines
         if not stripped:
             continue
 
@@ -28,11 +29,11 @@ def parse_markdown_to_json(md_text):
             continue
 
         # URL
-        if stripped.startswith("URL: "):
-            result["url"] = stripped[5:].strip()
+        if stripped.lower().startswith("url:") and not result["url"]:
+            result["url"] = stripped.split(":", 1)[1].strip()
             continue
 
-        # Heading
+        # Section Headings (##, ###, ####)
         if re.match(r"^#{2,4} ", stripped):
             if current_section:
                 result["sections"].append(current_section)
@@ -42,13 +43,10 @@ def parse_markdown_to_json(md_text):
             }
             continue
 
-        # Bullet or paragraph or table
+        # Content (bullets, paragraphs, table rows)
         if current_section:
             current_section["content"].append(stripped)
         else:
-            # If we get content before any heading
-            if not result.get("intro"):
-                result["intro"] = []
             result["intro"].append(stripped)
 
     if current_section:
@@ -56,15 +54,15 @@ def parse_markdown_to_json(md_text):
 
     return result
 
+# === 🗂️ Process all markdown files ===
 def process_all_markdowns():
-    md_files = list(INPUT_DIR.glob("*.md"))
+    md_files = sorted(INPUT_DIR.glob("*.md"))
 
     for md_path in md_files:
         with md_path.open(encoding="utf-8") as f:
             md_content = f.read()
 
         parsed_json = parse_markdown_to_json(md_content)
-
         output_filename = md_path.stem + ".json"
         output_path = OUTPUT_DIR / output_filename
 
@@ -73,5 +71,6 @@ def process_all_markdowns():
 
         print(f"✅ Converted: {md_path.name} → {output_filename}")
 
+# === 🚀 Entry Point ===
 if __name__ == "__main__":
     process_all_markdowns()

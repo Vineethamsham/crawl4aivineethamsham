@@ -11,6 +11,25 @@ JSON_PATH = Path("data/pages_json/discovered_links.json")
 OUTPUT_DIR = Path("output_markdown")
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
+#
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+
+# Click all .cmp-accordion__button elements
+try:
+    buttons = WebDriverWait(driver, 5).until(
+        EC.presence_of_all_elements_located((By.CSS_SELECTOR, ".cmp-accordion__button"))
+    )
+    for btn in buttons:
+        try:
+            driver.execute_script("arguments[0].click();", btn)
+            time.sleep(0.5)
+        except Exception as e:
+            print(f"⚠️ Failed to click: {e}")
+except:
+    print("⚠️ No accordion buttons found")
+
 
 # === ✅ Helpers ===
 def sanitize_filename(url):
@@ -99,3 +118,4 @@ if __name__ == "__main__":
     with open(JSON_PATH, "r", encoding="utf-8") as f:
         url = json.load(f)[0]["url"]
     process_url(url)
+

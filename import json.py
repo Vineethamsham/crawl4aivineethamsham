@@ -1,121 +1,68 @@
-import time, json, re
 from pathlib import Path
-from bs4 import BeautifulSoup
 from selenium import webdriver
-from selenium.webdriver.chrome.service import Service as ChromeService
+from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
+from bs4 import BeautifulSoup
+import json
+import re
 
-# === ✅ Configuration ===
+# --- Configuration ---
 CHROMEDRIVER_PATH = r"C:\Users\VAmsham1\chromedriver\chromedriver.exe"
 JSON_PATH = Path("data/pages_json/discovered_links.json")
 OUTPUT_DIR = Path("output_markdown")
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
-#
-from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
+# --- Load one URL from JSON ---
+with open(JSON_PATH, "r", encoding="utf-8") as f:
+    url = json.load(f)[0]["url"]
+print(f"🌐 Crawling: {url}")
 
-# Click all .cmp-accordion__button elements
-try:
-    buttons = WebDriverWait(driver, 5).until(
-        EC.presence_of_all_elements_located((By.CSS_SELECTOR, ".cmp-accordion__button"))
-    )
-    for btn in buttons:
-        try:
-            driver.execute_script("arguments[0].click();", btn)
-            time.sleep(0.5)
-        except Exception as e:
-            print(f"⚠️ Failed to click: {e}")
-except:
-    print("⚠️ No accordion buttons found")
+# --- Setup Chrome WebDriver ---
+chrome_options = Options()
+chrome_options.add_argument("--headless=new")
+chrome_options.add_argument("--disable-gpu")
+chrome_options.add_argument("--no-sandbox")
+chrome_options.add_argument("--disable-dev-shm-usage")
 
+service = Service(executable_path=CHROMEDRIVER_PATH)
+driver = webdriver.Chrome(service=service, options=chrome_options)
 
-# === ✅ Helpers ===
-def sanitize_filename(url):
-    return re.sub(r'\W+', '_', url).strip('_')
+# --- Visit Page ---
+driver.get(url)
+driver.implicitly_wait(5)  # wait for content
 
+# --- Extract Page Content ---
+soup = BeautifulSoup(driver.page_source, "html.parser")
+driver.quit()
 
-def process_url(url):
-    print(f"🌐 Crawling: {url}")
+# --- Extract Sections ---
+sections = soup.find_all(["h2", "h3", "h4", "p", "ul", "ol"])
+content_blocks = []
 
-    options = Options()
-    options.add_argument("--headless=new")  # Keep browser hidden
-    options.add_argument("--no-sandbox")
-    options.add_argument("--disable-gpu")
+for tag in sections:
+    tag_name = tag.name
+    tag_text = tag.get_text(strip=True)
+    if tag_name in ["h2", "h3"]:
+        content_blocks.append(f"\n## {tag_text}\n")
+    elif tag_name == "h4":
+        content_blocks.append(f"\n### {tag_text}\n")
+    elif tag_name == "p":
+        content_blocks.append(f"{tag_text}\n")
+    elif tag_name in ["ul", "ol"]:
+        for li in tag.find_all("li"):
+            content_blocks.append(f"- {li.get_text(strip=True)}\n")
 
-    driver = webdriver.Chrome(service=ChromeService(CHROMEDRIVER_PATH), options=options)
-    driver.get(url)
-    time.sleep(3)
+markdown = f"# {soup.title.string.strip() if soup.title else 'Document'}\n"
+markdown += f"URL: {url}\n\n"
+markdown += "".join(content_blocks)
 
-    # 🔄 Expand collapsible sections (accordion buttons, summary, custom toggles)
-    driver.execute_script("""
-        document.querySelectorAll('[role=button], summary, .cmp-accordion__button').forEach(el => {
-            try { el.click(); } catch(e) {}
-        });
-    """)
-    time.sleep(2)
+# --- Save to Markdown File ---
+def url_to_filename(url: str) -> str:
+    name = url.replace("https://", "").replace("http://", "").replace("/", "_")
+    return re.sub(r'\W+', '_', name) + ".md"
 
-    soup = BeautifulSoup(driver.page_source, "html.parser")
-    driver.quit()
+output_file = OUTPUT_DIR / url_to_filename(url)
+with open(output_file, "w", encoding="utf-8") as f:
+    f.write(markdown)
 
-    filename = sanitize_filename(url) + ".md"
-    filepath = OUTPUT_DIR / filename
-
-    with filepath.open("w", encoding="utf-8") as f:
-        title = soup.title.string.strip() if soup.title else "No Title Found"
-        f.write(f"# {title}\n")
-        f.write(f"URL: {url}\n\n")
-
-        headers = soup.find_all(["h2", "h3"])
-        for header in headers:
-            heading_text = header.get_text(strip=True)
-            f.write(f"## {heading_text}\n\n")
-
-            section_content = []
-
-            # Walk sibling blocks until next header
-            for sibling in header.find_next_siblings():
-                if sibling.name in ["h2", "h3"]:
-                    break
-
-                # Extract paragraphs inside cmp-text
-                if sibling.select_one(".cmp-text p"):
-                    for p in sibling.select(".cmp-text p"):
-                        text = p.get_text(strip=True)
-                        if text:
-                            section_content.append(text)
-
-                # Extract list items
-                elif sibling.select_one(".cmp-list__item"):
-                    for li in sibling.select(".cmp-list__item"):
-                        section_content.append(f"- {li.get_text(strip=True)}")
-
-                # Extract tables
-                elif sibling.select_one("table"):
-                    rows = sibling.select("table tr")
-                    for i, row in enumerate(rows):
-                        cols = [col.get_text(strip=True) for col in row.select("td, th")]
-                        section_content.append(" | ".join(cols))
-                        if i == 0:
-                            section_content.append("|".join(["---"] * len(cols)))
-
-                # Fallback div/span blocks
-                elif sibling.name in ["div", "span"]:
-                    text = sibling.get_text(strip=True)
-                    if text:
-                        section_content.append(text)
-
-            if section_content:
-                f.write("\n".join(section_content))
-                f.write("\n\n")
-
-    print(f"✅ Saved: {filepath}")
-
-
-# === ✅ Main logic for testing one URL ===
-if __name__ == "__main__":
-    with open(JSON_PATH, "r", encoding="utf-8") as f:
-        url = json.load(f)[0]["url"]
-    process_url(url)
-
+print(f"✅ Saved Markdown to {output_file}")
